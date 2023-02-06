@@ -1,0 +1,329 @@
+---
+title: "csp571_Project"
+output: html_notebook
+---
+
+## Load Libraries
+```{r}
+library(data.table)
+library(ggplot2)
+library(caret)
+library(tidyr)
+library(dplyr)
+library(essentials)
+library(lsa)
+```
+
+
+## Load dataset
+```{r}
+movie <- read.csv(file="movie.csv")
+rating <- read.csv(file="rating.csv", nrows=4000000)
+tag <- read.csv("tag.csv")
+dim(rating)
+```
+
+## Clean the data
+```{r}
+# Only consider movies that are watched atleast by 1% of the users
+  
+initial_movies_size <- length(unique(rating$movieId))
+movie_group <- rating %>% group_by(movieId) %>% summarize(cnt= n_distinct(userId))
+movie_group <- movie_group[movie_group$cnt>0.01*nrow(movie_group),]
+print(paste0("Number of movies reduced from ",initial_movies_size, " to ", nrow(movie_group)))
+
+rating <- rating[rating$movieId %in% movie_group$movieId,]
+dim(rating)
+
+```
+
+
+
+## Get the User-Movie matrix
+```{r}
+rating_pivot <- rating[,1:3] %>% pivot_wider(names_from=movieId, values_from=rating)
+rating_pivot[is.na(rating_pivot)] <- 0
+user_ids <- rating_pivot[,1]
+rating_pivot <- as.matrix(rating_pivot[,2:ncol(rating_pivot)])
+print(paste0("Numer of users: ", dim(rating_pivot)[1]))
+movie_cols <- colnames(rating_pivot)
+```
+
+
+
+## MAE and MCE Function
+```{r}
+mae <- function(predicted, test_mat, zero_mat, num_ele){
+  mae <- sum(abs((predicted - test_mat)*zero_mat))/num_ele
+  return(mae)
+}
+
+
+mce <- function(predicted, test_mat, zero_mat, num_ele){
+  val <- abs((predicted - test_mat)*zero_mat)
+  val <- (1+val)^3 # 1 is added to the value to ensure that value is >1 when powered to 3
+  mce <- sum(val)/num_ele
+  return(mce)
+}
+```
+
+
+## Matrix Factorization Function
+```{r}
+matrix_fact <- function(R, H, W, features, test_mat=NULL, epochs=20, alpha_=0.01, beta_=0.01, verbose=FALSE){
+  W <- t(W)
+  mae_list = c()
+  mce_list = c()
+  for (epoch in seq(1:epochs)){
+    for (i in seq(1:nrow(R))){
+      for (j in seq(1:ncol(R))){
+        if((R[i,j]>0)){
+          e_cell = R[i,j] - (H[i,]%*%W[,j])
+          H[i,] <- H[i,] + alpha_*(2*as.vector(e_cell)*W[,j] - beta_*H[i,])
+          W[,j] <- W[,j] + alpha_*(2*as.vector(e_cell)*H[i,]- beta_*W[,j])
+          #for (f in seq(1:features)){
+          #  H[i,f] = H[i,f] + alpha_*(2*e_cell*W[f,j]- beta_*H[i,f])
+          #  W[f,j] <- W[f,j] + alpha_*(2*e_cell*H[i,f]- beta_*W[f,j])
+          #}
+        }
+      }
+    }
+    R_new <- H%*%W
+    if(!is.null(test_mat)){
+      mae_val = mae(R_new, test_mat, zero_mat, num_ele)
+      mce_val = mce(R_new, test_mat, zero_mat, num_ele)
+      
+      if(verbose==TRUE){
+        print(paste0("Epoch ", epoch, " MAE:", mae_val, " MCE:", mce_val))
+      }
+      
+      mae_list = c(mae_list, mae_val)
+      mce_list = c(mce_list, mce_val)
+    }
+    if(is.null(test_mat)){
+      print(paste0("Epoch: ", epoch))
+    }
+    
+    }
+  R_out <- H%*%W
+  return(list("R_out" = R_out, "mae_list"=mae_list, "mce_list"=mce_list))
+}
+```
+
+
+
+## Split into train and test
+```{r}
+train_mat <- copy(rating_pivot)
+test_mat <- matrix(0, nrow(train_mat), ncol(train_mat))
+colnames(test_mat) <- colnames(train_mat)
+num_ele=0
+
+# create a zero-one matrix for faster MAE/MCE calculations
+zero_mat <- matrix(0, nrow=nrow(test_mat), ncol=ncol(test_mat))
+
+flag = TRUE
+for (i in seq(1:nrow(train_mat))){
+  flag = FALSE
+  for(j in seq(1:ncol(train_mat))){
+    # if flag = true, then assign with 0.1 probability to test matrix
+    if(train_mat[i,j]!=0){
+      if (flag==TRUE){ # may not be needed as only users with atleast one rating are present
+        if (runif(1,0,1)>0.8){
+          test_mat[i,j]=train_mat[i,j]
+          train_mat[i,j]=0
+          num_ele = num_ele + 1
+          zero_mat[i,j]=1
+        }
+      }
+    # set flag = True when atleast 1 rating>0 for a user
+    flag = TRUE
+    }
+  }
+}
+train_mat <- as.matrix(train_mat)
+test_mat <- as.matrix(test_mat)
+print(dim(train_mat))
+print(dim(test_mat))
+
+```
+
+
+```{r}
+rm(rating)
+```
+
+
+
+## Initialize variables
+```{r}
+row = dim(train_mat)[1]
+col = dim(train_mat)[2]
+features = 20
+
+set.seed(100)
+
+H = matrix(runif(row*features), nrow=row)
+W = matrix(runif(col*features), nrow=col)
+print(dim(H))
+print(dim(W))
+```
+
+
+## Run Model
+```{r}
+#W = t(W)
+startTime1 <- Sys.time()
+print(paste("MAE:", mae(H%*%t(W), train_mat, zero_mat, num_ele), " MSE:", mce(H%*%t(W), train_mat, zero_mat, num_ele)))
+output_list = matrix_fact(train_mat, H, W, features, test_mat, epochs = 50, alpha_=0.01, beta_=0.1, verbose=TRUE)
+endTime1 <- Sys.time()
+print(paste0("Time Take: ", endTime1 - startTime1))
+
+```
+
+## Plot Loss
+```{r}
+
+ggplot(data = data.frame(Epochs=seq(1, 50), MAE=output_list$mae_list), aes(x=Epochs, y=MAE), title("MAE Plot"))+
+         geom_line(col="steelblue", size=1.5)+
+  theme(axis.text.x=element_text(size=15), axis.text.y=element_text(size=15), axis.title = element_text(size=15))
+```
+
+
+```{r}
+# MCE Loss graph
+mce_df <- data.frame(Epochs=seq(1, 50), MCE=mce_list)
+colnames(mce_df) <- c("Epochs", "MCE")
+ggplot(data = mce_df, aes(x=Epochs, y=MCE))+
+         geom_line(col="seagreen", size=1.5)+
+  theme(axis.text.x=element_text(size=15), axis.text.y=element_text(size=15), axis.title = element_text(size=15))
+```
+
+## Run for the whole data
+```{r}
+startTime1 <- Sys.time()
+output_list2 = matrix_fact(rating_pivot, H, W, features, test_mat=NULL, epochs = 15, alpha_=0.01, beta_=0.1, verbose=TRUE)
+endTime1 <- Sys.time()
+print(paste0("Time Take: ", endTime1 - startTime1))
+```
+
+
+```{r}
+mae_val = mae(output_list2$R_out, rating_pivot, zero_mat, num_ele)
+mce_val = mce(output_list2$R_out, rating_pivot, zero_mat, num_ele)
+print(c(mae_val, mce_val))
+```
+
+```{r}
+# Clear space
+rm(rating)
+
+```
+
+
+## Matrix Factorization Recommendation
+
+```{r}
+
+get_recommendations <- function(user_id, output_list2, num_rec_movies=5, num_watched_movies=5){
+  user_pivot = data.frame(rating_pivot[user_id,])
+  colnames(user_pivot) <- "rating"
+  user_pivot$movieId <- rownames(user_pivot)
+  
+  R <- output_list2$R_out[user_id,]
+  
+  R = data.frame(R)
+  colnames(R) <- "rating"
+  R$movieId <- rownames(user_pivot)
+  R <- R[order(-R$rating),]
+  dim(R)
+  dim(user_pivot)
+  
+  # Remove movies already watched
+  user_movie_watched <- user_pivot[user_pivot$rating!=0,]
+  R <- R[!(R$movieId %in% user_movie_watched[,2]),]
+  R <- R[1:num_rec_movies,]
+  R[R$rating>5,1] = 5
+  R[R$rating<0,1] = 0
+  
+  
+  rownames(user_movie_watched) <- seq(1:nrow(user_movie_watched))
+  
+  user_movie_watched <- merge(user_movie_watched, movie, by="movieId", all.x=TRUE)
+  user_movie_watched <- user_movie_watched[order(-user_movie_watched$rating),]
+  print("######## Movies watched by user ########")
+  #print(head(user_movie_watched, num_watched_movies))
+  write.csv(head(user_movie_watched, num_watched_movies), "sample2_watched.csv")
+  
+  #R <- data.frame(R)
+  #rownames(R) <- seq(1:nrow(R))
+  user_movie_rec <- merge(R, movie, by = "movieId")
+  user_movie_rec$rating <- round(user_movie_rec$rating, 2)
+  print("######## Movies Recommended to user ########")
+  print(user_movie_rec)
+  #write.csv(user_movie_rec, "sample2_mat.csv")
+  return(user_movie_rec)
+}
+
+```
+
+
+## Cosine Similarity
+
+
+```{r}
+
+cosine_sim <- function(B, A){
+  return(cosine(A,B))
+}
+
+```
+
+```{r}
+
+get_cosine_rec <- function(user_id, rating_pivot, num_rec_movies=5)
+{
+  user_list = data.frame(matrix(nrow=0, ncol=2))
+  rating_pivot_1 <- copy(as.matrix(rating_pivot))
+  A = rating_pivot_1[user_id,] #user 1
+  rating_pivot_1 <- data.frame(rating_pivot_1)
+  #colnames(rating_pivot) <- movie_cols
+  out <- apply(as.matrix(rating_pivot_1[-user_id,]), 1, cosine_sim, A=A)
+  out2 <- sort(out, decreasing = TRUE)[1:5]
+  top_user_index <- as.numeric(names(out2[1]))
+  
+  df1 = rating_pivot_1[top_user_index,] # all the movies of the user
+  df1 = data.frame(df1)
+  df1 <- t(df1)
+  df1 <- as.data.frame(df1)
+  colnames(df1) <- "rating"
+  df1$movieId <- as.vector(movie_cols)
+  
+  
+  user_pivot = data.frame(rating_pivot[user_id,])
+  colnames(user_pivot) <- "rating"
+  user_pivot$movieId <- rownames(user_pivot)
+  user_movie_watched <- user_pivot[user_pivot$rating!=0,]
+  df1 <- df1[!(df1$movieId %in% user_movie_watched[,2]),]
+  df1 <- df1[df1$rating>2,]
+  
+  df1 <- df1[order(-df1$rating),]
+  
+  top_movies <- df1[1:num_rec_movies, ]
+  df2 <- merge(top_movies, movie, by="movieId")
+  return(df2)
+}
+
+```
+
+
+
+# Samples
+```{r}
+num_movies = 30
+user_id = 281
+cosine_out <- get_cosine_rec(user_id, rating_pivot, num_movies)
+sample2 <- get_recommendations(user_id, output_list2, 30, 30)
+write.csv(sample2, "out.csv")
+write.csv(cosine_out, "out2.csv")
+```

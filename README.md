@@ -1,0 +1,9 @@
+# Movie Recommendation
+
+## Abstract
+In today's world, almost everyone prefers to watch movies from the comfort of their homes. Streaming behemoths like Netflix and Amazon take advantage of this, and their services on OTT have a massive number of subscribers. They keep these subscribers by using a recommendation engine that gives them a list of movies they would prefer to watch based on their previous streaming patterns; even compare the ratings of other users who have watched and rated a particular movie/show. In this project, we have tried to understand how the recommendation engine predicts movies for different users.
+
+## Conclusion
+This project uses 2 recommender systems to recommend movies. The models can predict any number of movies to be recommended. Both models seem to offer similar recommendations to the user. But there are a few trade-offs. Matrix factorization takes more memory and time to run. It also requires hyperparameter optimization. However, once the predicted matrix is generated, inference is fast. Specifying the number of features that would be relevant to the problem gives more control. The Cosine similarity method takes a user as input and generates
+recommendations. It does not take much memory but when it needs to be done for a large number of users, it is slower (based on the methodology used).
+The Matrix factorization model has an MAE of 0.6 which suggests that predicted ratings are not very far off. Comparing the MCE graph for different models (tuned with hyper-parameters) helps us ensure that predicted values are not outliers. The recommendations provided by the model outputs make practical sense and model output can be tuned to provide any number of recommendations.
